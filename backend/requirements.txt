@@ -1,0 +1,11 @@
+fastapi
+uvicorn
+pydantic
+transformers
+sentence-transformers
+faiss-cpu
+langchain
+langgraph
+pymupdf
+python-multipart
+pytest
