@@ -3,8 +3,26 @@ import streamlit as st
 import requests
 import pandas as pd
 import plotly.express as px
+from requests.exceptions import RequestException
 
-API_BASE = "http://127.0.0.1:8001"
+API_BASE = os.getenv("API_BASE", "http://127.0.0.1:8002")
+
+
+def api_post(endpoint, **kwargs):
+    try:
+        response = requests.post(f"{API_BASE}{endpoint}", **kwargs)
+        response.raise_for_status()
+        return response
+    except RequestException as exc:
+        st.error(
+            "Unable to reach the backend service. "
+            f"Please confirm the backend is running at {API_BASE}."
+        )
+        st.error(f"Error: {exc}")
+        return None
+    except Exception as exc:
+        st.error(f"Unexpected error: {exc}")
+        return None
 
 
 def init_state():
@@ -20,6 +38,8 @@ def init_state():
         st.session_state.ai_cache = {}
     if "chat_history" not in st.session_state:
         st.session_state.chat_history = []
+    if "selected_candidate" not in st.session_state:
+        st.session_state.selected_candidate = None
 
 
 def load_css():
@@ -44,6 +64,8 @@ body, .streamlit-expanderHeader { background: #0f172a !important; color: #f8fafc
 .stButton>button { background-color: #3b82f6; border-radius: 999px; color: white; border: none; padding: 0.75rem 1.25rem; }
 .stButton>button:hover { background-color: #2563eb; }
 .st-bf { color: #94a3b8; }
+h3 { word-break: break-word; overflow-wrap: break-word; white-space: normal !important; max-width: 100%; }
+.candidate-name { display: block; word-break: break-word; overflow-wrap: break-word; white-space: normal !important; max-width: 100%; margin-bottom: 8px; }
 </style>
 """,
         unsafe_allow_html=True,
@@ -72,11 +94,13 @@ def upload_and_rank(files, job_description):
     for file in files:
         filename = unique_filename(file.name)
         with st.spinner(f"Uploading {filename}..."):
-            response = requests.post(
-                f"{API_BASE}/upload-resume",
+            response = api_post(
+                "/upload-resume",
                 files={"file": (filename, file, "application/pdf")},
                 timeout=120,
             )
+        if response is None:
+            return None
         if response.status_code == 200:
             resume_paths.append(response.json().get("path"))
         else:
@@ -85,11 +109,13 @@ def upload_and_rank(files, job_description):
         st.error(f"Failed to upload: {', '.join(failed)}")
     if resume_paths:
         with st.spinner("Analyzing and ranking candidates..."):
-            response = requests.post(
-                f"{API_BASE}/rank-candidates",
+            response = api_post(
+                "/rank-candidates",
                 json={"resume_paths": resume_paths, "job_description": job_description},
                 timeout=300,
             )
+        if response is None:
+            return None
         if response.status_code == 200:
             st.session_state.resume_paths = resume_paths
             st.session_state.results = response.json()
@@ -230,17 +256,17 @@ def render_rankings():
                     "Recommendation": row["recommendation"],
                 })
         st.table(pd.DataFrame(compare_rows))
-    for candidate in rankings:
+    for i, candidate in enumerate(rankings):
         status_label, status_class = format_status(candidate["recommendation"])
         st.markdown(
             f"""
 <div class='card'>
-  <div style='display:flex; justify-content:space-between; flex-wrap:wrap; gap:12px;'>
-    <div>
-      <h3 style='margin:0; color:#f8fafc;'>{candidate['candidate']}</h3>
+  <div style='display:grid; grid-template-columns:1fr auto; gap:20px; align-items:start;'>
+    <div style='min-width:0;'>
+      <h3 style='margin:0; color:#f8fafc; word-break:break-word; overflow-wrap:break-word;'>{candidate['candidate']}</h3>
       <div style='margin-top:8px;'><span class='status-chip {status_class}'>{status_label}</span></div>
     </div>
-    <div style='text-align:right;'>
+    <div style='text-align:right; white-space:nowrap;'>
       <div style='color:#94a3b8;'>Match Score</div>
       <div style='font-size:1.45rem; font-weight:700;'>{candidate['score']}</div>
     </div>
@@ -258,21 +284,25 @@ def render_rankings():
   </div>
   <div style='display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px; margin-top:18px;'>
     <span style='color:#94a3b8;'>Resume: {candidate['resume_path']}</span>
-    <div style='display:flex; gap:10px; flex-wrap:wrap;'>
-      <button style='background:#3b82f6; color:#fff; border:none; border-radius:999px; padding:10px 16px;'>View Details</button>
-      <button style='background:#14b8a6; color:#fff; border:none; border-radius:999px; padding:10px 16px;'>AI Analysis</button>
-      <button style='background:#f59e0b; color:#fff; border:none; border-radius:999px; padding:10px 16px;'>Interview Qs</button>
-    </div>
   </div>
 </div>
 """,
             unsafe_allow_html=True,
         )
-    st.markdown("<div class='card'><div class='section-title'>Candidate Detail View</div></div>", unsafe_allow_html=True)
-    selected_name = st.selectbox("Choose a candidate", [item["candidate"] for item in rankings], key="detail_choice")
-    selected = next((item for item in rankings if item["candidate"] == selected_name), rankings[0])
-    render_candidate_detail(selected)
-
+        action_cols = st.columns(3)
+        if action_cols[0].button("View Details", key=f"view_details_{i}"):
+            st.session_state.page = "Candidate Detail"
+            st.session_state.selected_candidate = candidate
+            st.rerun()
+        if action_cols[1].button("AI Analysis", key=f"ai_analysis_{i}"):
+            st.session_state.page = "AI Recruiter"
+            st.session_state.ai_candidate = candidate 
+            st.rerun()
+        if action_cols[2].button("Interview Qs", key=f"interview_questions_{i}"):
+            st.session_state.page = "AI Recruiter"
+            st.session_state.ai_candidate = candidate
+            st.rerun()
+   
 
 def render_candidate_detail(candidate):
     st.markdown(f"<div class='card'><h3>{candidate['candidate']}</h3></div>", unsafe_allow_html=True)
@@ -324,15 +354,22 @@ def render_ai_recruiter():
     left, right = st.columns([3, 1], gap="large")
     with left:
         st.markdown("#### Chat with your AI recruiter")
-        query = st.text_input("Enter a recruiter question", key="chat_query")
+        default_query = st.session_state.get("pending_query", "")
+        query = st.text_input("Enter a recruiter question", value=default_query, key="chat_input")
+
+        if "pending_query" in st.session_state:
+            del st.session_state["pending_query"]
+            
         if st.button("Send Message", key="chat_send"):
             if query.strip():
                 with st.spinner("Getting AI response..."):
-                    resp = requests.post(
-                        f"{API_BASE}/chat",
+                    resp = api_post(
+                        "/chat",
                         json={"prompt": query, "resume_paths": st.session_state.resume_paths},
                         timeout=300,
                     )
+                if resp is None:
+                    return
                 if resp.status_code == 200:
                     response_text = resp.json().get("response", "")
                     st.session_state.chat_history.append((query, response_text))
@@ -352,8 +389,8 @@ def render_ai_recruiter():
         ]
         for suggestion in suggestions:
             if st.button(suggestion, key=suggestion):
-                st.session_state.chat_query = suggestion
-                st.experimental_rerun()
+                st.session_state["pending_query"] = suggestion
+                st.rerun()
     st.markdown("---")
     st.subheader("Candidate AI Tools")
     rankings = st.session_state.results.get("rankings", []) if st.session_state.results else []
@@ -368,7 +405,13 @@ def render_ai_recruiter():
             cache_key = f"strengths_{candidate_name}"
             if cache_key not in st.session_state.ai_cache:
                 with st.spinner("Extracting strengths..."):
-                    resp = requests.post(f"{API_BASE}/extract-strengths", json={"resume_path": selected["resume_path"]}, timeout=300)
+                    resp = api_post(
+                        "/extract-strengths",
+                        json={"resume_path": selected["resume_path"]},
+                        timeout=300,
+                    )
+                if resp is None:
+                    return
                 st.session_state.ai_cache[cache_key] = resp.json().get("strengths", []) if resp.status_code == 200 else []
             strengths = st.session_state.ai_cache[cache_key]
             st.markdown("#### Strengths")
@@ -379,7 +422,13 @@ def render_ai_recruiter():
             cache_key = f"summary_{candidate_name}"
             if cache_key not in st.session_state.ai_cache:
                 with st.spinner("Summarizing resume..."):
-                    resp = requests.post(f"{API_BASE}/summarize-resume", json={"resume_path": selected["resume_path"]}, timeout=300)
+                    resp = api_post(
+                        "/summarize-resume",
+                        json={"resume_path": selected["resume_path"]},
+                        timeout=300,
+                    )
+                if resp is None:
+                    return
                 st.session_state.ai_cache[cache_key] = resp.json().get("summary", []) if resp.status_code == 200 else []
             summary = st.session_state.ai_cache[cache_key]
             st.markdown("#### Resume Summary")
@@ -390,11 +439,13 @@ def render_ai_recruiter():
             cache_key = f"questions_{candidate_name}"
             if cache_key not in st.session_state.ai_cache:
                 with st.spinner("Generating interview questions..."):
-                    resp = requests.post(
-                        f"{API_BASE}/generate-interview-questions",
+                    resp = api_post(
+                        "/generate-interview-questions",
                         json={"resume_path": selected["resume_path"], "job_description": st.session_state.get("job_input", "")},
                         timeout=300,
                     )
+                if resp is None:
+                    return
                 st.session_state.ai_cache[cache_key] = resp.json().get("questions", []) if resp.status_code == 200 else []
             questions = st.session_state.ai_cache[cache_key]
             st.markdown("#### Interview Questions")
@@ -417,9 +468,10 @@ def main():
             "Dashboard",
             "Resume Screening",
             "Candidate Rankings",
+            "Candidate Detail",
             "Analytics",
             "AI Recruiter",
-            "Settings",
+                "Settings",
         ]
         selected = st.radio("Navigation", pages, index=pages.index(st.session_state.page) if st.session_state.page in pages else 0)
         st.session_state.page = selected
@@ -432,6 +484,15 @@ def main():
         render_rankings()
     elif st.session_state.page == "Analytics":
         render_analytics()
+    elif st.session_state.page == "Candidate Detail":
+
+        if st.session_state.selected_candidate is not None:
+            render_candidate_detail(
+                st.session_state.selected_candidate
+        )
+        else:
+            st.warning("No candidate selected.")
+        
     elif st.session_state.page == "AI Recruiter":
         render_ai_recruiter()
     else:

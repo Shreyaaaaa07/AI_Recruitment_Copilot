@@ -8,4 +8,8 @@ langchain
 langgraph
 pymupdf
 python-multipart
+streamlit
+plotly
 pytest
+ollama
+requests

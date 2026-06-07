@@ -1,20 +1,27 @@
 import json
 import ollama
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class LLMService:
 
     def _call_llm(self, prompt: str):
-        response = ollama.chat(
-            model="llama3",
-            messages=[
-                {
-                    "role": "user",
-                    "content": prompt
-                }
-            ]
-        )
-        return response["message"]["content"]
+        try:
+            response = ollama.chat(
+                model="llama3",
+                messages=[
+                    {
+                        "role": "user",
+                        "content": prompt
+                    }
+                ]
+            )
+            return response["message"]["content"]
+        except Exception as e:
+            logger.error(f"Error calling LLM: {str(e)}")
+            return f"AI service unavailable: {str(e)}"
 
     def _parse_json_list(self, text: str, key: str):
         try:

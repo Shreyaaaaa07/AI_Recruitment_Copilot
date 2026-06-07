@@ -1,5 +1,6 @@
 from backend.agents.resume_agent import ResumeAgent
 from backend.agents.jd_agent import JDAgent
+from backend.schemas import resume
 from backend.services.matching_service import MatchingService
 from backend.services.llm_service import LLMService
 
@@ -33,6 +34,12 @@ class RankingService:
                 resume_path
             )
 
+            print("================================")
+            print("Resume:", resume_path)
+            print("Name:", resume.name)
+            print("Skills:", resume.skills)
+            print("================================")
+
             score = self.matching_service.calculate_skill_match(
                 resume,
                 job
@@ -59,6 +66,11 @@ class RankingService:
                 len(score.matched_skills) +
                 len(score.missing_skills)
             )
+
+            print("\n===== CANDIDATE DEBUG =====")
+            print("Resume Path:", resume_path)
+            print("Candidate Name:", resume.name)
+            print("==========================\n")
 
             results.append(
                 {

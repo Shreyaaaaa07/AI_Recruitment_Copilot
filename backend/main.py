@@ -1,6 +1,11 @@
 from fastapi import FastAPI, UploadFile, File
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 import os
 import shutil
+import logging
+
+logger = logging.getLogger(__name__)
 
 from backend.agents.resume_agent import ResumeAgent
 from backend.agents.jd_agent import JDAgent
@@ -21,6 +26,15 @@ from backend.schemas.ai_requests import (
 
 app = FastAPI(
     title="AI Recruitment Copilot"
+)
+
+# Add CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 resume_agent = ResumeAgent()
@@ -108,75 +122,93 @@ async def rank_candidates(
 async def extract_strengths(
     request: StrengthsRequest
 ):
+    try:
+        resume = resume_agent.parse(
+            request.resume_path
+        )
 
-    resume = resume_agent.parse(
-        request.resume_path
-    )
+        resume_text = resume_agent.extract_text(
+            request.resume_path
+        )
 
-    resume_text = resume_agent.extract_text(
-        request.resume_path
-    )
+        strengths = llm_service.extract_strengths(
+            resume.name,
+            resume_text
+        )
 
-    strengths = llm_service.extract_strengths(
-        resume.name,
-        resume_text
-    )
-
-    return {
-        "strengths": strengths
-    }
+        return {
+            "strengths": strengths
+        }
+    except Exception as e:
+        logger.error(f"Error in extract_strengths: {str(e)}")
+        return JSONResponse(
+            status_code=200,
+            content={"strengths": ["Unable to extract strengths: " + str(e)]}
+        )
 
 
 @app.post("/summarize-resume")
 async def summarize_resume(
     request: SummarizeRequest
 ):
+    try:
+        resume = resume_agent.parse(
+            request.resume_path
+        )
 
-    resume = resume_agent.parse(
-        request.resume_path
-    )
+        resume_text = resume_agent.extract_text(
+            request.resume_path
+        )
 
-    resume_text = resume_agent.extract_text(
-        request.resume_path
-    )
+        summary = llm_service.summarize_resume(
+            resume.name,
+            resume_text
+        )
 
-    summary = llm_service.summarize_resume(
-        resume.name,
-        resume_text
-    )
-
-    return {
-        "summary": summary
-    }
+        return {
+            "summary": summary
+        }
+    except Exception as e:
+        logger.error(f"Error in summarize_resume: {str(e)}")
+        return JSONResponse(
+            status_code=200,
+            content={"summary": ["Unable to summarize resume: " + str(e)]}
+        )
 
 
 @app.post("/generate-interview-questions")
 async def generate_interview_questions(
     request: InterviewQuestionRequest
 ):
+    try:
+        resume = resume_agent.parse(
+            request.resume_path
+        )
 
-    resume = resume_agent.parse(
-        request.resume_path
-    )
+        job = jd_agent.parse(
+            request.job_description
+        )
 
-    job = jd_agent.parse(
-        request.job_description
-    )
+        score = matching_service.calculate_skill_match(
+            resume,
+            job
+        )
 
-    score = matching_service.calculate_skill_match(
-        resume,
-        job
-    )
+        questions = llm_service.generate_interview_questions(
+            resume.name,
+            score.missing_skills,
+            job.job_title
+        )
 
-    questions = llm_service.generate_interview_questions(
-        resume.name,
-        score.missing_skills,
-        job.job_title
-    )
-
-    return {
-        "questions": questions
-    }
+        return {
+            "questions": questions
+        }
+    except Exception as e:
+        logger.error(f"Error in generate_interview_questions: {str(e)}")
+        return JSONResponse(
+            status_code=200,
+            content={"questions": ["Unable to generate interview questions: " + str(e)]}
+        )
 
 
 @app.post("/search-candidates")
@@ -223,28 +255,39 @@ async def search_candidates(
 async def chat(
     request: ChatRequest
 ):
+    try:
+        context = ""
 
-    context = ""
+        if request.resume_paths:
+            lines = []
+            for resume_path in request.resume_paths:
+                resume = resume_agent.parse(
+                    resume_path
+                )
+                lines.append(
+                    f"{resume.name}: skills={resume.skills}, education={resume.education}, experience={resume.experience}"
+                )
+            context = "\n".join(lines)
 
-    if request.resume_paths:
-        lines = []
-        for resume_path in request.resume_paths:
-            resume = resume_agent.parse(
-                resume_path
-            )
-            lines.append(
-                f"{resume.name}: skills={resume.skills}, education={resume.education}, experience={resume.experience}"
-            )
-        context = "\n".join(lines)
+        response = llm_service.chat(
+            request.prompt,
+            context
+        )
 
-    response = llm_service.chat(
-        request.prompt,
-        context
-    )
+        return {
+            "response": response
+        }
+    except Exception as e:
+        logger.error(f"Error in chat: {str(e)}")
+        return JSONResponse(
+            status_code=200,
+            content={"response": "Unable to process chat request: " + str(e)}
+        )
 
-    return {
-        "response": response
-    }
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="127.0.0.1", port=8001)
 
 
 
